@@ -1,4 +1,4 @@
-#include "temp_humi_monitor.h"
+#include "task_read_dht11.h"
 #define DHTPIN 1
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);

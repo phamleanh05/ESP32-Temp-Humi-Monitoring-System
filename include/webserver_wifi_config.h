@@ -1,13 +1,13 @@
-#ifndef WIFI_CONFIG_H
-#define WIFI_CONFIG_H
+#ifndef WEBSERVER_WIFI_CONFIG_H
+#define WEBSERVER_WIFI_CONFIG_H
 
 #include <WiFi.h>
 #include <AsyncWebSocket.h>
 #include <ArduinoJson.h>
-#include <Preferences.h>
 #include <LittleFS.h>
 #include <Adafruit_NeoPixel.h>
 #include "global.h"
+#include "task_check_info.h"
 
 #define LED_GPIO 48
 #define NEO_PIN 45
@@ -28,7 +28,6 @@ class WiFiConfigServer {
 private:
     AsyncWebServer* server;
     AsyncWebSocket* ws;
-    Preferences preferences;
     bool isConfigMode;
     String configSSID;
     String configPassword;
@@ -85,6 +84,6 @@ public:
 extern WiFiConfigServer* wifiConfig;
 
 // WiFi configuration task function
-void wifi_config_task(void *parameter);
+void webserver_wifi_config_task(void *parameter);
 
 #endif

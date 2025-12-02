@@ -1,5 +1,5 @@
-#ifndef __TEMP_HUMI_MONITOR__
-#define __TEMP_HUMI_MONITOR__
+#ifndef __TASK_READ_DHT11__
+#define __TASK_READ_DHT11__
 #include <Arduino.h>
 #include <Wire.h>
 #include "LiquidCrystal_I2C.h"
