@@ -1,0 +1,79 @@
+MAINSERVER.CPP CODE ISSUES AND FIXES
+====================================
+
+IDENTIFIED ISSUES:
+
+1. POTENTIAL SERVER CONFLICT
+   Location: mainserver.cpp:9 and task_webserver.cpp:3
+   Issue: Both files declare WebServer/AsyncWebServer with same port (80)
+   - mainserver.cpp:9: WebServer server(80);
+   - task_webserver.cpp:3: AsyncWebServer server(80);
+   
+   Problem: Two different server instances using the same port will cause conflicts
+
+2. MISSING GLOBAL VARIABLE DECLARATIONS
+   Issue: Variables used in mainserver.cpp but not properly declared in global.h
+   - glob_temperature and glob_humidity are used but may not be properly initialized
+   - wifi_ssid and wifi_password are used but declaration needs verification
+
+3. POTENTIAL MEMORY ISSUES
+   Location: mainPage() function (lines 14-280)
+   Issue: Very large HTML string stored in program memory
+   - 266+ lines of embedded HTML/CSS/JS
+   - Uses significant program memory space
+   - Better practice would be to serve from filesystem like task_webserver
+
+4. INCONSISTENT VARIABLE NAMING
+   Location: Multiple locations
+   Issue: Mixed naming conventions
+   - Some variables use camelCase (isAPMode, wifi_ssid)
+   - Others use snake_case (led1_state, connect_start_ms)
+
+5. HARDCODED GPIO PINS
+   Location: mainserver.h:9-11
+   Issue: GPIO pins hardcoded in header
+   - LED1_PIN 48, LED2_PIN 41, BOOT_PIN 0
+   - Should be configurable or defined in a config file
+
+6. MISSING ERROR HANDLING
+   Location: Various functions
+   Issue: Limited error checking for WiFi operations
+   - No validation for WiFi connection parameters
+   - Limited timeout handling
+
+7. POTENTIAL WATCHDOG RESET
+   Location: main_server_task() function (line 413)
+   Issue: Short delay may not prevent watchdog reset under heavy load
+   - vTaskDelay(20) might be insufficient
+
+MANUAL FIXES NEEDED:
+
+1. RESOLVE SERVER CONFLICT:
+   - Choose either WebServer OR AsyncWebServer, not both
+   - If keeping both, use different ports
+   - Recommended: Use AsyncWebServer for better performance
+
+2. MOVE HTML TO FILESYSTEM:
+   - Create separate HTML files in data/ folder
+   - Use LittleFS.begin() to serve files like task_webserver does
+   - This will free up significant program memory
+
+3. STANDARDIZE VARIABLE NAMING:
+   - Choose either camelCase or snake_case consistently
+   - Update all variable declarations
+
+4. ADD ERROR HANDLING:
+   - Add parameter validation for WiFi credentials
+   - Implement proper timeout handling
+   - Add connection status checking
+
+5. INCREASE TASK DELAY:
+   - Change vTaskDelay(20) to vTaskDelay(100) or higher
+   - Monitor system performance after change
+
+6. CREATE CONFIGURATION FILE:
+   - Move GPIO pin definitions to config.h
+   - Make pins configurable at runtime if needed
+
+SEVERITY: CRITICAL (Server conflict will prevent proper operation)
+PRIORITY: Fix server conflict first, then memory optimization
