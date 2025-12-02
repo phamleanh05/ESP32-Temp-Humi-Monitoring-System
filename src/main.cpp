@@ -1,7 +1,7 @@
 #include "global.h"
 
-#include "led_blinky.h"
-#include "neo_blinky.h"
+// #include "led_blinky.h"
+// #include "neo_blinky.h"
 #include "tinyml.h"
 #include "coreiot.h"
 #include "webserver_wifi_config.h"
@@ -12,6 +12,8 @@
 #include "task_toogle_boot.h"
 #include "task_wifi.h"
 #include "task_core_iot.h"
+#include "task_light_sensor.h"
+#include "task_lcd.h"
 
 
 void setup()
@@ -20,6 +22,8 @@ void setup()
   check_info_File(0);
 
   xTaskCreate(temp_humi_monitor, "Task TEMP HUMI Monitor", 2048, NULL, 2, NULL);
+  xTaskCreate(task_light_sensor, "Task Light Sensor", 2048, NULL, 2, NULL);
+  xTaskCreate(task_lcd, "Task LCD Display", 2048, NULL, 1, NULL);
   // Need turn of led_blynk and neo_blynk function
   xTaskCreate(webserver_wifi_config_task, "WebServer WiFi Config Task", 8192, NULL, 3, NULL);
   // xTaskCreate(tiny_ml_task, "Tiny ML Task" ,2048  ,NULL  ,2 , NULL);

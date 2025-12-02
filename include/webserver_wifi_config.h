@@ -70,9 +70,11 @@ public:
     void sendWiFiList();
     void sendSensorData();
     void sendLEDStatus();
+    void sendLightSensorData();
     void broadcastMessage(const String& message);
     String getSensorDataJSON();
     String getLEDStatusJSON();
+    String getLightSensorJSON();
     
     // LED control methods
     void setLEDState(bool state);

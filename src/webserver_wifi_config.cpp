@@ -74,9 +74,17 @@ void WiFiConfigServer::loop() {
     }
     
     static unsigned long lastStatusUpdate = 0;
+    static unsigned long lastSensorUpdate = 0;
+    
     if (millis() - lastStatusUpdate > 5000) {
         sendWiFiStatus();
         lastStatusUpdate = millis();
+    }
+    
+    // Send sensor data including light sensor every 3 seconds
+    if (millis() - lastSensorUpdate > 3000) {
+        sendSensorData();
+        lastSensorUpdate = millis();
     }
 }
 
@@ -215,6 +223,9 @@ void WiFiConfigServer::onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *c
         Serial.printf("WebSocket client #%u connected\n", client->id());
         sendWiFiStatus();
         sendWiFiList();
+        sendSensorData();
+        sendLEDStatus();
+        sendLightSensorData();
     } else if (type == WS_EVT_DISCONNECT) {
         Serial.printf("WebSocket client #%u disconnected\n", client->id());
     } else if (type == WS_EVT_DATA) {
@@ -291,6 +302,8 @@ void WiFiConfigServer::handleWebSocketMessage(void *arg, uint8_t *data, size_t l
             bool state = doc["state"];
             setNeoState(state);
             sendLEDStatus();
+        } else if (action == "get_light") {
+            sendLightSensorData();
         }
     }
 }
@@ -314,6 +327,14 @@ void WiFiConfigServer::setupConfigRoutes() {
         }
     });
     
+    server->on("/dashboard", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        if (LittleFS.exists("/dashboard.html")) {
+            request->send(LittleFS, "/dashboard.html", "text/html");
+        } else {
+            request->send(404, "text/html", "<h1>Dashboard not found</h1><p>Please upload dashboard.html to LittleFS</p>");
+        }
+    });
+    
     server->on("/scan", HTTP_GET, [this](AsyncWebServerRequest *request) {
         request->send(200, "application/json", getWiFiScanJSON());
     });
@@ -328,6 +349,10 @@ void WiFiConfigServer::setupConfigRoutes() {
     
     server->on("/leds", HTTP_GET, [this](AsyncWebServerRequest *request) {
         request->send(200, "application/json", getLEDStatusJSON());
+    });
+    
+    server->on("/light", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        request->send(200, "application/json", getLightSensorJSON());
     });
 }
 
@@ -411,10 +436,12 @@ void WiFiConfigServer::broadcastMessage(const String& message) {
 }
 
 String WiFiConfigServer::getSensorDataJSON() {
-    DynamicJsonDocument doc(256);
+    DynamicJsonDocument doc(512);
     
     doc["temperature"] = glob_temperature;
     doc["humidity"] = glob_humidity;
+    doc["light_level"] = glob_light_level;
+    doc["led_state"] = glob_led_state;
     doc["timestamp"] = millis();
     doc["valid"] = !isnan(glob_temperature) && !isnan(glob_humidity);
     
@@ -425,10 +452,12 @@ String WiFiConfigServer::getSensorDataJSON() {
 
 void WiFiConfigServer::sendSensorData() {
     if (ws->count() > 0) {
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(512);
         doc["type"] = "sensors";
         doc["temperature"] = glob_temperature;
         doc["humidity"] = glob_humidity;
+        doc["light_level"] = glob_light_level;
+        doc["led_state"] = glob_led_state;
         doc["timestamp"] = millis();
         doc["valid"] = !isnan(glob_temperature) && !isnan(glob_humidity);
         
@@ -439,12 +468,29 @@ void WiFiConfigServer::sendSensorData() {
 }
 
 String WiFiConfigServer::getLEDStatusJSON() {
-    DynamicJsonDocument doc(256);
+    DynamicJsonDocument doc(512);
     
     doc["led_state"] = ledState;
     doc["neo_state"] = neoState;
+    doc["light_led_state"] = glob_led_state;
     doc["led_pin"] = LED_GPIO;
     doc["neo_pin"] = NEO_PIN;
+    doc["light_led_pin"] = 2;
+    doc["timestamp"] = millis();
+    
+    String result;
+    serializeJson(doc, result);
+    return result;
+}
+
+String WiFiConfigServer::getLightSensorJSON() {
+    DynamicJsonDocument doc(256);
+    
+    doc["light_level"] = glob_light_level;
+    doc["led_state"] = glob_led_state;
+    doc["threshold"] = 500;
+    doc["sensor_pin"] = 1;
+    doc["led_pin"] = 2;
     doc["timestamp"] = millis();
     
     String result;
@@ -460,6 +506,23 @@ void WiFiConfigServer::sendLEDStatus() {
         doc["neo_state"] = neoState;
         doc["led_pin"] = LED_GPIO;
         doc["neo_pin"] = NEO_PIN;
+        doc["timestamp"] = millis();
+        
+        String message;
+        serializeJson(doc, message);
+        ws->textAll(message);
+    }
+}
+
+void WiFiConfigServer::sendLightSensorData() {
+    if (ws->count() > 0) {
+        DynamicJsonDocument doc(256);
+        doc["type"] = "light";
+        doc["light_level"] = glob_light_level;
+        doc["led_state"] = glob_led_state;
+        doc["threshold"] = 500;
+        doc["sensor_pin"] = 1;
+        doc["led_pin"] = 2;
         doc["timestamp"] = millis();
         
         String message;
