@@ -37,7 +37,12 @@ WiFiConfigServer::WiFiConfigServer(AsyncWebServer* webServer, AsyncWebSocket* we
 }
 
 void WiFiConfigServer::begin() {
-    // LittleFS initialization is handled by check_info_File in main
+    preferences.begin("wifi-config", false);
+    
+    if (!LittleFS.begin()) {
+        Serial.println("LittleFS Mount Failed");
+        return;
+    }
     
     ws->onEvent([this](AsyncWebSocket *server, AsyncWebSocketClient *client, 
                        AwsEventType type, void *arg, uint8_t *data, size_t len) {
@@ -51,9 +56,9 @@ void WiFiConfigServer::begin() {
     server->begin();
     Serial.println("WiFi Config Web Server started");
     
-    // Check if WiFi credentials exist in info.dat file
-    if (check_info_File(true)) {
-        if (!connectToWiFi(WIFI_SSID, WIFI_PASS)) {
+    WiFiCredentials creds = loadWiFiCredentials();
+    if (creds.ssid.length() > 0) {
+        if (!connectToWiFi(creds.ssid, creds.password)) {
             Serial.println("Failed to connect with saved credentials, starting config mode");
             startConfigMode();
         }
@@ -114,26 +119,29 @@ void WiFiConfigServer::stopConfigMode() {
 }
 
 bool WiFiConfigServer::saveWiFiCredentials(const String& ssid, const String& password) {
-    // Use task_check_info function to save WiFi credentials
-    // Preserve existing IoT settings when saving WiFi credentials
-    Save_info_File(ssid, password, CORE_IOT_TOKEN.isEmpty() ? "" : CORE_IOT_TOKEN, 
-                   CORE_IOT_SERVER.isEmpty() ? "" : CORE_IOT_SERVER, 
-                   CORE_IOT_PORT.isEmpty() ? "" : CORE_IOT_PORT);
+    preferences.putString("ssid", ssid);
+    preferences.putString("password", password);
+    // Save_info_File(ssid, password, CORE_IOT_TOKEN.isEmpty() ? "" : CORE_IOT_TOKEN, 
+    //                CORE_IOT_SERVER.isEmpty() ? "" : CORE_IOT_SERVER, 
+    //                CORE_IOT_PORT.isEmpty() ? "" : CORE_IOT_PORT);
+
     Serial.printf("WiFi credentials saved: %s\n", ssid.c_str());
     return true;
 }
 
 WiFiCredentials WiFiConfigServer::loadWiFiCredentials() {
     WiFiCredentials creds;
-    // Load credentials from global variables set by task_check_info
-    creds.ssid = WIFI_SSID;
-    creds.password = WIFI_PASS;
+    creds.ssid = preferences.getString("ssid", "");
+    creds.password = preferences.getString("password", "");
+    // creds.ssid = WIFI_SSID;
+    // creds.password = WIFI_PASS;
     return creds;
 }
 
 void WiFiConfigServer::clearWiFiCredentials() {
-    // Use task_check_info function to delete credentials
-    Delete_info_File();
+    preferences.remove("ssid");
+    preferences.remove("password");
+    // Delete_info_File();
     Serial.println("WiFi credentials cleared");
 }
 

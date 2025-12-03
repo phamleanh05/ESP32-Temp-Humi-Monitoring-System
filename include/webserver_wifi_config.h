@@ -4,10 +4,10 @@
 #include <WiFi.h>
 #include <AsyncWebSocket.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <LittleFS.h>
 #include <Adafruit_NeoPixel.h>
 #include "global.h"
-#include "task_check_info.h"
 
 #define LED_GPIO 48
 #define NEO_PIN 45
@@ -28,6 +28,7 @@ class WiFiConfigServer {
 private:
     AsyncWebServer* server;
     AsyncWebSocket* ws;
+    Preferences preferences;
     bool isConfigMode;
     String configSSID;
     String configPassword;
