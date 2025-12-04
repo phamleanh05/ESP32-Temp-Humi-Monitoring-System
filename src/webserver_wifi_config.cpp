@@ -24,7 +24,8 @@ void webserver_wifi_config_task(void *parameter)
 }
 
 WiFiConfigServer::WiFiConfigServer(AsyncWebServer* webServer, AsyncWebSocket* webSocket) 
-    : server(webServer), ws(webSocket), isConfigMode(false), ledState(false), neoState(false) {
+    : server(webServer), ws(webSocket), isConfigMode(false), ledState(false), neoState(false),
+      savedNeoR(0), savedNeoG(255), savedNeoB(0), savedNeoHex("#00ff00") {
     // Initialize LED pins
     pinMode(LED_GPIO, OUTPUT);
     digitalWrite(LED_GPIO, LOW);
@@ -43,6 +44,9 @@ void WiFiConfigServer::begin() {
         Serial.println("LittleFS Mount Failed");
         return;
     }
+    
+    // Load saved NeoPixel color
+    loadSavedNeoColor();
     
     ws->onEvent([this](AsyncWebSocket *server, AsyncWebSocketClient *client, 
                        AwsEventType type, void *arg, uint8_t *data, size_t len) {
@@ -310,6 +314,37 @@ void WiFiConfigServer::handleWebSocketMessage(void *arg, uint8_t *data, size_t l
             bool state = doc["state"];
             setNeoState(state);
             sendLEDStatus();
+        } else if (action == "preview_neo_color") {
+            uint8_t r = doc["r"];
+            uint8_t g = doc["g"];
+            uint8_t b = doc["b"];
+            setNeoColor(r, g, b);
+            
+            // Send confirmation response for preview
+            DynamicJsonDocument response(256);
+            response["type"] = "neo_color_result";
+            response["action"] = "preview";
+            response["success"] = true;
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
+        } else if (action == "save_neo_color") {
+            uint8_t r = doc["r"];
+            uint8_t g = doc["g"];
+            uint8_t b = doc["b"];
+            String hex = doc["hex"];
+            
+            bool saved = saveNeoColor(r, g, b, hex);
+            setNeoColor(r, g, b);
+            
+            // Send confirmation response for save
+            DynamicJsonDocument response(256);
+            response["type"] = "neo_color_result";
+            response["action"] = "save";
+            response["success"] = saved;
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
         } else if (action == "get_light") {
             sendLightSensorData();
         }
@@ -548,12 +583,60 @@ void WiFiConfigServer::setLEDState(bool state) {
 void WiFiConfigServer::setNeoState(bool state) {
     neoState = state;
     if (state) {
-        neoPixel->setPixelColor(0, neoPixel->Color(0, 255, 0)); // Green when ON
+        // Use saved color when turning on
+        neoPixel->setPixelColor(0, neoPixel->Color(savedNeoR, savedNeoG, savedNeoB));
     } else {
         neoPixel->setPixelColor(0, neoPixel->Color(0, 0, 0)); // Off
     }
     neoPixel->show();
-    Serial.printf("NeoPixel GPIO %d set to %s\n", NEO_PIN, state ? "ON" : "OFF");
+    Serial.printf("NeoPixel GPIO %d set to %s (saved color: RGB(%d,%d,%d))\n", 
+                  NEO_PIN, state ? "ON" : "OFF", savedNeoR, savedNeoG, savedNeoB);
+}
+
+void WiFiConfigServer::setNeoColor(uint8_t r, uint8_t g, uint8_t b) {
+    neoPixel->setPixelColor(0, neoPixel->Color(r, g, b));
+    neoPixel->show();
+    neoState = true; // Set NeoPixel as ON when color is changed
+    Serial.printf("NeoPixel GPIO %d color set to RGB(%d, %d, %d)\n", NEO_PIN, r, g, b);
+}
+
+bool WiFiConfigServer::saveNeoColor(uint8_t r, uint8_t g, uint8_t b, const String& hex) {
+    savedNeoR = r;
+    savedNeoG = g;
+    savedNeoB = b;
+    savedNeoHex = hex;
+    
+    // Save to preferences
+    preferences.putUChar("neo_r", r);
+    preferences.putUChar("neo_g", g);
+    preferences.putUChar("neo_b", b);
+    preferences.putString("neo_hex", hex);
+    
+    Serial.printf("NeoPixel color saved: RGB(%d, %d, %d) = %s\n", r, g, b, hex.c_str());
+    return true;
+}
+
+void WiFiConfigServer::loadSavedNeoColor() {
+    // Load saved color from preferences, use default if not found
+    savedNeoR = preferences.getUChar("neo_r", 0);
+    savedNeoG = preferences.getUChar("neo_g", 255);
+    savedNeoB = preferences.getUChar("neo_b", 0);
+    savedNeoHex = preferences.getString("neo_hex", "#00ff00");
+    
+    Serial.printf("Loaded saved NeoPixel color: RGB(%d, %d, %d) = %s\n", 
+                  savedNeoR, savedNeoG, savedNeoB, savedNeoHex.c_str());
+    
+    // Send saved color to connected clients
+    DynamicJsonDocument doc(256);
+    doc["type"] = "saved_color";
+    doc["r"] = savedNeoR;
+    doc["g"] = savedNeoG;
+    doc["b"] = savedNeoB;
+    doc["hex"] = savedNeoHex;
+    
+    String message;
+    serializeJson(doc, message);
+    ws->textAll(message);
 }
 
 bool WiFiConfigServer::getLEDState() {

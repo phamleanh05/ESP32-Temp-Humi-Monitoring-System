@@ -37,6 +37,8 @@ private:
     bool ledState;
     bool neoState;
     Adafruit_NeoPixel* neoPixel;
+    uint8_t savedNeoR, savedNeoG, savedNeoB;
+    String savedNeoHex;
     
     void handleWebSocketMessage(void *arg, uint8_t *data, size_t len);
     void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
@@ -80,6 +82,9 @@ public:
     // LED control methods
     void setLEDState(bool state);
     void setNeoState(bool state);
+    void setNeoColor(uint8_t r, uint8_t g, uint8_t b);
+    bool saveNeoColor(uint8_t r, uint8_t g, uint8_t b, const String& hex);
+    void loadSavedNeoColor();
     bool getLEDState();
     bool getNeoState();
 };
