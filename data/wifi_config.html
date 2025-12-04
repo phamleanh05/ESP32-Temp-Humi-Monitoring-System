@@ -151,7 +151,6 @@
                 <button class="btn btn-primary" onclick="scanNetworks()">🔍 Scan Networks</button>
                 <button class="btn btn-secondary" onclick="refreshStatus()">🔄 Refresh</button>
                 <button class="btn btn-danger" onclick="disconnect()">❌ Disconnect</button>
-                <button class="btn btn-danger" onclick="clearCredentials()">🗑️ Clear Saved</button>
             </div>
             
             <div id="loading" class="loading hidden">
@@ -211,9 +210,6 @@
                 } else {
                     alert('❌ Connection failed: ' + data.message);
                 }
-            } else if (data.type === 'credentials_cleared') {
-                alert('🗑️ Saved credentials cleared');
-                refreshStatus();
             }
         }
         
@@ -310,13 +306,6 @@
             }
         }
         
-        function clearCredentials() {
-            if (confirm('Clear saved WiFi credentials?')) {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({action: 'clear_credentials'}));
-                }
-            }
-        }
         
         function refreshStatus() {
             if (ws && ws.readyState === WebSocket.OPEN) {

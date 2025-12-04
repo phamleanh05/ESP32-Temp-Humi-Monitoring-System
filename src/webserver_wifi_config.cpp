@@ -142,12 +142,6 @@ WiFiCredentials WiFiConfigServer::loadWiFiCredentials() {
     return creds;
 }
 
-void WiFiConfigServer::clearWiFiCredentials() {
-    preferences.remove("ssid");
-    preferences.remove("password");
-    // Delete_info_File();
-    Serial.println("WiFi credentials cleared");
-}
 
 std::vector<WiFiNetwork> WiFiConfigServer::scanWiFiNetworks() {
     std::vector<WiFiNetwork> networks;
@@ -291,15 +285,6 @@ void WiFiConfigServer::handleWebSocketMessage(void *arg, uint8_t *data, size_t l
         } else if (action == "disconnect") {
             disconnectWiFi();
             sendWiFiStatus();
-        } else if (action == "clear_credentials") {
-            clearWiFiCredentials();
-            DynamicJsonDocument response(256);
-            response["type"] = "credentials_cleared";
-            response["success"] = true;
-            
-            String responseStr;
-            serializeJson(response, responseStr);
-            ws->textAll(responseStr);
         } else if (action == "get_status") {
             sendWiFiStatus();
         } else if (action == "get_sensors") {

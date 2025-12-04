@@ -58,7 +58,6 @@ public:
     
     bool saveWiFiCredentials(const String& ssid, const String& password);
     WiFiCredentials loadWiFiCredentials();
-    void clearWiFiCredentials();
     
     std::vector<WiFiNetwork> scanWiFiNetworks();
     bool connectToWiFi(const String& ssid, const String& password, unsigned long timeout = 10000);

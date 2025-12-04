@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <WiFi.h>
 #include "LiquidCrystal_I2C.h"
 #include "global.h"
 

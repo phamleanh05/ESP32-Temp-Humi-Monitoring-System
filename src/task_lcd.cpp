@@ -24,7 +24,7 @@ void displaySensorData() {
         lcd.print("Humi: ");
         lcd.print(glob_humidity, 1);
         lcd.print("%");
-    } else {
+    } else if (displayMode == 1) {
         // Display Light level and LED status
         lcd.setCursor(0, 0);
         lcd.print("Light: ");
@@ -32,10 +32,28 @@ void displaySensorData() {
         lcd.setCursor(0, 1);
         lcd.print("LED: ");
         lcd.print(glob_led_state ? "ON " : "OFF");
+    } else {
+        // Display ESP32 IP Address
+        lcd.setCursor(0, 0);
+        if (WiFi.status() == WL_CONNECTED) {
+            lcd.print("WiFi IP:");
+            lcd.setCursor(0, 1);
+            String ip = WiFi.localIP().toString();
+            if (ip.length() > 16) {
+                // If IP is too long, scroll it or show shortened version
+                lcd.print(ip.substring(0, 16));
+            } else {
+                lcd.print(ip);
+            }
+        } else {
+            lcd.print("No WiFi");
+            lcd.setCursor(0, 1);
+            lcd.print("192.168.4.1"); // Access Point IP
+        }
     }
     
-    // Switch display mode every cycle
-    displayMode = (displayMode + 1) % 2;
+    // Switch display mode every cycle (3 modes now)
+    displayMode = (displayMode + 1) % 3;
 }
 
 void task_lcd(void *pvParameters) {
