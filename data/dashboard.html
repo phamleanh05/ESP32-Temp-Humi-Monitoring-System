@@ -17,6 +17,29 @@
             box-shadow: 0 15px 35px rgba(0,0,0,0.1);
             overflow: hidden;
         }
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .container { max-width: 600px; }
+            .sensor-grid { grid-template-columns: 1fr; }
+            .led-grid { grid-template-columns: 1fr; }
+        }
+        
+        @media (min-width: 769px) and (max-width: 1024px) {
+            .container { max-width: 90%; margin: 0 auto; }
+            .sensor-grid { grid-template-columns: repeat(2, 1fr); }
+            .led-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        
+        @media (min-width: 1025px) {
+            .container { 
+                max-width: 95%; 
+                width: calc(100vw - 40px);
+                margin: 0 auto; 
+            }
+            .sensor-grid { grid-template-columns: repeat(4, 1fr); }
+            .led-grid { grid-template-columns: repeat(3, 1fr); }
+        }
         .header { 
             background: linear-gradient(135deg, #2196F3, #1976D2);
             color: white; padding: 25px; text-align: center;

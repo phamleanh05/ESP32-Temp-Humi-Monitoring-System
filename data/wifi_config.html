@@ -17,6 +17,34 @@
             box-shadow: 0 15px 35px rgba(0,0,0,0.1);
             overflow: hidden;
         }
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .container { max-width: 500px; }
+            .network-list { grid-template-columns: 1fr; }
+        }
+        
+        @media (min-width: 769px) and (max-width: 1024px) {
+            .container { max-width: 90%; margin: 0 auto; }
+            .network-list { 
+                display: grid; 
+                grid-template-columns: repeat(2, 1fr); 
+                gap: 10px; 
+            }
+        }
+        
+        @media (min-width: 1025px) {
+            .container { 
+                max-width: 95%; 
+                width: calc(100vw - 40px);
+                margin: 0 auto; 
+            }
+            .network-list { 
+                display: grid; 
+                grid-template-columns: repeat(4, 1fr); 
+                gap: 15px; 
+            }
+        }
         .header { 
             background: linear-gradient(135deg, #4CAF50, #45a049);
             color: white; padding: 25px; text-align: center;
@@ -77,7 +105,11 @@
         }
         .modal-content { 
             background: white; padding: 30px; border-radius: 15px;
-            width: 90%; max-width: 400px; text-align: center;
+            width: 90%; max-width: 500px; text-align: center;
+        }
+        
+        @media (min-width: 1025px) {
+            .modal-content { max-width: 600px; }
         }
         .controls { text-align: center; margin: 20px 0; }
         .nav-btn {

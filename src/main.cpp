@@ -14,6 +14,7 @@
 #include "task_core_iot.h"
 #include "task_light_sensor.h"
 #include "task_lcd.h"
+#include "task_thingboard.h"
 
 
 void setup()
@@ -24,6 +25,7 @@ void setup()
   xTaskCreate(temp_humi_monitor, "Task TEMP HUMI Monitor", 2048, NULL, 2, NULL);
   xTaskCreate(task_light_sensor, "Task Light Sensor", 2048, NULL, 2, NULL);
   xTaskCreate(task_lcd, "Task LCD Display", 2048, NULL, 1, NULL);
+  // xTaskCreate(task_thingboard, "Task ThingBoard", 4096, NULL, 2, NULL);
   // Need turn of led_blynk and neo_blynk function
   xTaskCreate(webserver_wifi_config_task, "WebServer WiFi Config Task", 8192, NULL, 3, NULL);
   // xTaskCreate(tiny_ml_task, "Tiny ML Task" ,2048  ,NULL  ,2 , NULL);
