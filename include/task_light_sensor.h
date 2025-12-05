@@ -15,7 +15,4 @@ void initLightSensor();
 int readLightLevel();
 void controlLED(bool state);
 
-extern int glob_light_level;
-extern bool glob_led_state;
-
 #endif

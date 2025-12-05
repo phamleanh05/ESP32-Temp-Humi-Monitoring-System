@@ -40,6 +40,16 @@ private:
     uint8_t savedNeoR, savedNeoG, savedNeoB;
     String savedNeoHex;
     
+    // Temperature alert settings
+    uint8_t alertNeoR, alertNeoG, alertNeoB;
+    String alertNeoHex;
+    float tempThreshold;
+    
+    // Normal NeoPixel operation
+    bool isBlinking;
+    unsigned long lastBlinkTime;
+    bool blinkState;
+    
     void handleWebSocketMessage(void *arg, uint8_t *data, size_t len);
     void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
                    AwsEventType type, void *arg, uint8_t *data, size_t len);
@@ -80,12 +90,20 @@ public:
     
     // LED control methods
     void setLEDState(bool state);
-    void setNeoState(bool state);
-    void setNeoColor(uint8_t r, uint8_t g, uint8_t b);
+    void setNeoColorForTemperature(float temperature); // Temperature-based NeoPixel control
+    void setNeoColor(uint8_t r, uint8_t g, uint8_t b); // Normal color setting
+    void setNeoState(bool state); // Manual control for normal operation
+    void handleNeoBlinking(); // Handle blinking during alerts
     bool saveNeoColor(uint8_t r, uint8_t g, uint8_t b, const String& hex);
     void loadSavedNeoColor();
     bool getLEDState();
     bool getNeoState();
+    
+    // Temperature alert configuration methods
+    bool saveAlertColor(uint8_t r, uint8_t g, uint8_t b, const String& hex);
+    void loadAlertSettings();
+    bool saveTempThreshold(float threshold);
+    String getAlertSettingsJSON();
 };
 
 extern WiFiConfigServer* wifiConfig;

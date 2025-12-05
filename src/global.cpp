@@ -1,6 +1,10 @@
 #include "global.h"
 float glob_temperature = 0;
 float glob_humidity = 0;
+int glob_light_level = 0;
+bool glob_led_state = false;
+bool glob_temp_alert = false;
+float HIGH_TEMP_THRESHOLD = 30.0;
 
 String WIFI_SSID;
 String WIFI_PASS;

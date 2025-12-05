@@ -1,8 +1,5 @@
 #include "task_light_sensor.h"
 
-int glob_light_level = 0;
-bool glob_led_state = false;
-
 void initLightSensor() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);

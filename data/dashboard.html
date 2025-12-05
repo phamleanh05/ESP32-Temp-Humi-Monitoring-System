@@ -79,7 +79,24 @@
         .sensor-label { font-size: 14px; color: #666; margin-bottom: 10px; }
         .sensor-status { font-size: 12px; padding: 4px 8px; border-radius: 12px; }
         .temp-card { border-left: 4px solid #ff5722; }
+        .temp-card.alert { border-left: 4px solid #dc3545; background: #ffebee; animation: pulse 1.5s infinite; }
         .humidity-card { border-left: 4px solid #2196F3; }
+        
+        /* Temperature alert animation */
+        @keyframes pulse {
+            0% { background: #ffebee; }
+            50% { background: #ffcdd2; }
+            100% { background: #ffebee; }
+        }
+        
+        .alert-badge {
+            background: #dc3545; color: white; padding: 2px 6px;
+            border-radius: 10px; font-size: 10px; font-weight: bold;
+        }
+        .normal-badge {
+            background: #4CAF50; color: white; padding: 2px 6px;
+            border-radius: 10px; font-size: 10px; font-weight: bold;
+        }
         .light-card { border-left: 4px solid #FFC107; }
         .led-controls {
             background: #f8f9fa; border-radius: 12px; padding: 20px;
@@ -137,19 +154,31 @@
             <!-- Sensor Data Grid -->
             <div class="sensor-grid">
                 <!-- Temperature -->
-                <div class="sensor-card temp-card">
+                <div class="sensor-card temp-card" id="temp-card">
                     <div class="sensor-icon">🌡️</div>
                     <div class="sensor-value" id="temperature">--°C</div>
                     <div class="sensor-label">Temperature</div>
-                    <div class="sensor-status" id="temp-status">--</div>
+                    <div style="margin-top: 10px; font-size: 15px;">
+                        <label style="display: block; margin-bottom: 3px; color: #666;">Alert Threshold:</label>
+                        <div style="display: flex; align-items: center; gap: 5px;">
+                            <input type="number" id="temp-threshold" value="30" step="0.1" min="0" max="100"
+                                   style="width: 60px; padding: 3px; border: 1px solid #ccc; border-radius: 3px; font-size: 15px;">
+                            <span style="color: #666;">°C</span>
+                            <button onclick="saveTempThreshold()" 
+                                    style="padding: 3px 8px; border: none; background: #4CAF50; color: white; border-radius: 3px; cursor: pointer; font-size: 15px;">
+                                Save
+                            </button>
+                        </div>
+                        <div id="temp-threshold-status" style="font-size: 10px; color: #666; margin-top: 3px;"></div>
+                    </div>
                 </div>
+                
                 
                 <!-- Humidity -->
                 <div class="sensor-card humidity-card">
                     <div class="sensor-icon">💧</div>
                     <div class="sensor-value" id="humidity">--%</div>
                     <div class="sensor-label">Humidity</div>
-                    <div class="sensor-status" id="humidity-status">--</div>
                 </div>
                 
                 <!-- Light Sensor -->
@@ -176,17 +205,17 @@
                     
                     <div class="led-control" id="neo-control">
                         <h4>NeoPixel (GPIO 45)</h4>
-                        <button id="neo-btn" class="btn btn-secondary" onclick="toggleNeo()">
-                            <span id="neo-status">OFF</span>
-                        </button>
                         <div style="margin-top: 10px;">
-                            <label for="color-picker" style="font-size: 14px; display: block; margin-bottom: 5px;">Color:</label>
+                            <label for="color-picker" style="font-size: 14px; display: block; margin-bottom: 5px;">Normal Color:</label>
                             <input type="color" id="color-picker" value="#00ff00" onchange="previewNeoColor()" 
                                    style="width: 100%; height: 40px; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 10px;">
                             <button class="btn btn-primary" onclick="saveNeoColor()" style="width: 100%; font-size: 14px;">
                                 💾 Save Color
                             </button>
                             <div id="color-status" style="font-size: 12px; text-align: center; margin-top: 5px; color: #666;"></div>
+                        </div>
+                        <div style="font-size: 12px; color: #666; margin-top: 10px; text-align: center;">
+                            🚨 Auto-switches to red and blinks when temperature is too hot
                         </div>
                     </div>
                     
@@ -201,6 +230,7 @@
                     </div>
                 </div>
             </div>
+            
             
             <div class="last-update" id="last-update">
                 Last update: --
@@ -240,6 +270,8 @@
         }
         
         function handleWebSocketMessage(data) {
+            console.log('WebSocket message received:', data.type, data);
+            
             if (data.type === 'status') {
                 updateStatus(data);
             } else if (data.type === 'sensors') {
@@ -267,6 +299,18 @@
                 if (data.hex) {
                     colorPicker.value = data.hex;
                 }
+            } else if (data.type === 'alert_settings') {
+                updateAlertSettings(data);
+            } else if (data.type === 'temp_threshold_result') {
+                const statusDiv = document.getElementById('temp-threshold-status');
+                if (data.success) {
+                    statusDiv.textContent = '✅ Saved!';
+                    statusDiv.style.color = '#4CAF50';
+                } else {
+                    statusDiv.textContent = '❌ Failed';
+                    statusDiv.style.color = '#dc3545';
+                }
+                setTimeout(() => statusDiv.textContent = '', 3000);
             }
         }
         
@@ -290,35 +334,42 @@
             const tempEl = document.getElementById('temperature');
             const humidityEl = document.getElementById('humidity');
             const lightLevelEl = document.getElementById('light-level');
-            const tempStatusEl = document.getElementById('temp-status');
-            const humidityStatusEl = document.getElementById('humidity-status');
             const autoLedStatusEl = document.getElementById('auto-led-status');
             const autoLedDisplayEl = document.getElementById('auto-led-display');
+            const tempCard = document.getElementById('temp-card');
             
             if (data.valid) {
                 tempEl.textContent = `${data.temperature.toFixed(1)}°C`;
                 humidityEl.textContent = `${data.humidity.toFixed(1)}%`;
                 lightLevelEl.textContent = `${data.light_level || 0}`;
                 
-                tempStatusEl.textContent = 'Normal';
-                tempStatusEl.style.background = '#e8f5e8';
-                tempStatusEl.style.color = '#2e7d32';
+                // Temperature card background change based on alert status (like light sensor)
+                console.log('Temperature data:', data.temperature, 'Threshold:', data.temp_threshold, 'Alert:', data.temp_alert);
                 
-                humidityStatusEl.textContent = 'Normal';
-                humidityStatusEl.style.background = '#e8f5e8';
-                humidityStatusEl.style.color = '#2e7d32';
+                if (data.temp_alert === true) {
+                    // High temperature - change to red/dark theme
+                    tempCard.style.background = '#ffebee';
+                    tempCard.style.color = '#c62828';
+                    tempCard.style.borderLeftColor = '#dc3545';
+                    tempCard.classList.add('alert');
+                    console.log('🚨 HIGH TEMPERATURE ALERT! Background should be RED');
+                } else {
+                    // Normal temperature - default theme
+                    tempCard.style.background = '#f8f9fa';
+                    tempCard.style.color = '#333';
+                    tempCard.style.borderLeftColor = '#ff5722';
+                    tempCard.classList.remove('alert');
+                    console.log('✅ Normal temperature - Background should be normal');
+                }
             } else {
                 tempEl.textContent = 'Error';
                 humidityEl.textContent = 'Error';
                 lightLevelEl.textContent = 'Error';
                 
-                tempStatusEl.textContent = 'Error';
-                tempStatusEl.style.background = '#ffebee';
-                tempStatusEl.style.color = '#c62828';
-                
-                humidityStatusEl.textContent = 'Error';
-                humidityStatusEl.style.background = '#ffebee';
-                humidityStatusEl.style.color = '#c62828';
+                // Set error styling for temperature card
+                tempCard.style.background = '#ffebee';
+                tempCard.style.color = '#c62828';
+                tempCard.style.borderLeftColor = '#dc3545';
             }
             
             // Update light sensor display
@@ -363,28 +414,28 @@
         
         function updateLEDStatus(data) {
             const ledStatusEl = document.getElementById('led-status');
-            const neoStatusEl = document.getElementById('neo-status');
             const ledBtnEl = document.getElementById('led-btn');
-            const neoBtnEl = document.getElementById('neo-btn');
             const ledControlEl = document.getElementById('led-control');
             const neoControlEl = document.getElementById('neo-control');
             
             // Update manual LED
-            ledStatusEl.textContent = data.led_state ? 'ON' : 'OFF';
-            ledBtnEl.className = data.led_state ? 'btn btn-primary' : 'btn btn-secondary';
-            if (data.led_state) {
-                ledControlEl.classList.add('active');
-            } else {
-                ledControlEl.classList.remove('active');
+            if (ledStatusEl && ledBtnEl && ledControlEl) {
+                ledStatusEl.textContent = data.led_state ? 'ON' : 'OFF';
+                ledBtnEl.className = data.led_state ? 'btn btn-primary' : 'btn btn-secondary';
+                if (data.led_state) {
+                    ledControlEl.classList.add('active');
+                } else {
+                    ledControlEl.classList.remove('active');
+                }
             }
             
-            // Update NeoPixel
-            neoStatusEl.textContent = data.neo_state ? 'ON' : 'OFF';
-            neoBtnEl.className = data.neo_state ? 'btn btn-primary' : 'btn btn-secondary';
-            if (data.neo_state) {
-                neoControlEl.classList.add('active');
-            } else {
-                neoControlEl.classList.remove('active');
+            // Update NeoPixel visual state (no button, just border highlighting)
+            if (neoControlEl) {
+                if (data.neo_state) {
+                    neoControlEl.classList.add('active');
+                } else {
+                    neoControlEl.classList.remove('active');
+                }
             }
         }
         
@@ -398,15 +449,6 @@
             }
         }
         
-        function toggleNeo() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                const currentState = document.getElementById('neo-status').textContent === 'ON';
-                ws.send(JSON.stringify({
-                    action: 'control_neo', 
-                    state: !currentState
-                }));
-            }
-        }
         
         function previewNeoColor() {
             const colorPicker = document.getElementById('color-picker');
@@ -456,6 +498,41 @@
             statusDiv.style.color = '#666';
         }
         
+        function updateAlertSettings(data) {
+            const tempThresholdEl = document.getElementById('temp-threshold');
+            
+            if (tempThresholdEl) {
+                tempThresholdEl.value = data.temp_threshold || 30;
+            }
+            
+            console.log('Alert settings updated:', data);
+        }
+        
+        
+        function saveTempThreshold() {
+            const thresholdInput = document.getElementById('temp-threshold');
+            const threshold = parseFloat(thresholdInput.value);
+            
+            if (isNaN(threshold) || threshold < 0 || threshold > 100) {
+                const statusDiv = document.getElementById('temp-threshold-status');
+                statusDiv.textContent = '❌ Invalid (0-100°C)';
+                statusDiv.style.color = '#dc3545';
+                setTimeout(() => statusDiv.textContent = '', 3000);
+                return;
+            }
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    action: 'save_temp_threshold',
+                    threshold: threshold
+                }));
+            }
+            
+            const statusDiv = document.getElementById('temp-threshold-status');
+            statusDiv.textContent = 'Saving...';
+            statusDiv.style.color = '#666';
+        }
+        
         
         function refreshAll() {
             console.log('Dashboard refreshAll called, WebSocket state:', ws ? ws.readyState : 'null');
@@ -465,6 +542,7 @@
                 ws.send(JSON.stringify({action: 'get_sensors'}));
                 ws.send(JSON.stringify({action: 'get_leds'}));
                 ws.send(JSON.stringify({action: 'get_light'}));
+                ws.send(JSON.stringify({action: 'get_alert_settings'}));
             } else {
                 console.log('Dashboard WebSocket not ready, state:', ws ? ws.readyState : 'null');
             }

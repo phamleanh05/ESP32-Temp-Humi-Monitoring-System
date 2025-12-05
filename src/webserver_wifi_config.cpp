@@ -24,16 +24,18 @@ void webserver_wifi_config_task(void *parameter)
 }
 
 WiFiConfigServer::WiFiConfigServer(AsyncWebServer* webServer, AsyncWebSocket* webSocket) 
-    : server(webServer), ws(webSocket), isConfigMode(false), ledState(false), neoState(false),
-      savedNeoR(0), savedNeoG(255), savedNeoB(0), savedNeoHex("#00ff00") {
+    : server(webServer), ws(webSocket), isConfigMode(false), ledState(false), neoState(true),
+      savedNeoR(0), savedNeoG(255), savedNeoB(0), savedNeoHex("#00ff00"),
+      alertNeoR(255), alertNeoG(0), alertNeoB(0), alertNeoHex("#ff0000"), tempThreshold(30.0),
+      isBlinking(false), lastBlinkTime(0), blinkState(false) {
     // Initialize LED pins
     pinMode(LED_GPIO, OUTPUT);
     digitalWrite(LED_GPIO, LOW);
     
-    // Initialize NeoPixel
+    // Initialize NeoPixel - start with normal color (green)
     neoPixel = new Adafruit_NeoPixel(LED_COUNT, NEO_PIN, NEO_GRB + NEO_KHZ800);
     neoPixel->begin();
-    neoPixel->clear();
+    neoPixel->setPixelColor(0, neoPixel->Color(savedNeoR, savedNeoG, savedNeoB)); // Start with saved color
     neoPixel->show();
 }
 
@@ -45,8 +47,9 @@ void WiFiConfigServer::begin() {
         return;
     }
     
-    // Load saved NeoPixel color
+    // Load saved NeoPixel color and alert settings
     loadSavedNeoColor();
+    loadAlertSettings();
     
     ws->onEvent([this](AsyncWebSocket *server, AsyncWebSocketClient *client, 
                        AwsEventType type, void *arg, uint8_t *data, size_t len) {
@@ -93,8 +96,17 @@ void WiFiConfigServer::loop() {
     // Send sensor data including light sensor every 3 seconds
     if (millis() - lastSensorUpdate > 3000) {
         sendSensorData();
+        
+        // Update NeoPixel based on temperature
+        if (!isnan(glob_temperature)) {
+            setNeoColorForTemperature(glob_temperature);
+        }
+        
         lastSensorUpdate = millis();
     }
+    
+    // Handle NeoPixel blinking for alerts
+    handleNeoBlinking();
 }
 
 void WiFiConfigServer::startConfigMode(const char* apSSID, const char* apPassword) {
@@ -232,6 +244,21 @@ void WiFiConfigServer::onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *c
         sendSensorData();
         sendLEDStatus();
         sendLightSensorData();
+        
+        // Send alert settings
+        DynamicJsonDocument doc(512);
+        doc["type"] = "alert_settings";
+        doc["alert_r"] = alertNeoR;
+        doc["alert_g"] = alertNeoG;
+        doc["alert_b"] = alertNeoB;
+        doc["alert_hex"] = alertNeoHex;
+        doc["temp_threshold"] = tempThreshold;
+        doc["current_temp"] = glob_temperature;
+        doc["temp_alert"] = glob_temp_alert;
+        
+        String message;
+        serializeJson(doc, message);
+        ws->textAll(message);
     } else if (type == WS_EVT_DISCONNECT) {
         Serial.printf("WebSocket client #%u disconnected\n", client->id());
     } else if (type == WS_EVT_DATA) {
@@ -295,6 +322,7 @@ void WiFiConfigServer::handleWebSocketMessage(void *arg, uint8_t *data, size_t l
             bool state = doc["state"];
             setLEDState(state);
             sendLEDStatus();
+        // Manual NeoPixel control functions restored for normal operation
         } else if (action == "control_neo") {
             bool state = doc["state"];
             setNeoState(state);
@@ -320,7 +348,9 @@ void WiFiConfigServer::handleWebSocketMessage(void *arg, uint8_t *data, size_t l
             String hex = doc["hex"];
             
             bool saved = saveNeoColor(r, g, b, hex);
-            setNeoColor(r, g, b);
+            if (!isBlinking) { // Apply immediately if not in alert mode
+                setNeoColor(r, g, b);
+            }
             
             // Send confirmation response for save
             DynamicJsonDocument response(256);
@@ -332,17 +362,57 @@ void WiFiConfigServer::handleWebSocketMessage(void *arg, uint8_t *data, size_t l
             ws->textAll(responseStr);
         } else if (action == "get_light") {
             sendLightSensorData();
+        } else if (action == "save_alert_color") {
+            uint8_t r = doc["r"];
+            uint8_t g = doc["g"];
+            uint8_t b = doc["b"];
+            String hex = doc["hex"];
+            
+            bool saved = saveAlertColor(r, g, b, hex);
+            
+            DynamicJsonDocument response(256);
+            response["type"] = "alert_color_result";
+            response["success"] = saved;
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
+        } else if (action == "save_temp_threshold") {
+            float threshold = doc["threshold"];
+            
+            bool saved = saveTempThreshold(threshold);
+            
+            DynamicJsonDocument response(256);
+            response["type"] = "temp_threshold_result";
+            response["success"] = saved;
+            response["threshold"] = threshold;
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
+        } else if (action == "get_alert_settings") {
+            DynamicJsonDocument response(512);
+            response["type"] = "alert_settings";
+            response["alert_r"] = alertNeoR;
+            response["alert_g"] = alertNeoG;
+            response["alert_b"] = alertNeoB;
+            response["alert_hex"] = alertNeoHex;
+            response["temp_threshold"] = tempThreshold;
+            response["current_temp"] = glob_temperature;
+            response["temp_alert"] = glob_temp_alert;
+            
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
         }
     }
 }
 
 void WiFiConfigServer::setupConfigRoutes() {
     server->on("/", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        // Try to serve from LittleFS first, fallback to function
-        if (LittleFS.exists("/wifi_config.html")) {
-            request->send(LittleFS, "/wifi_config.html", "text/html");
+        // Serve dashboard.html as root page
+        if (LittleFS.exists("/dashboard.html")) {
+            request->send(LittleFS, "/dashboard.html", "text/html");
         } else {
-            request->send(200, "text/html", getConfigPageHTML());
+            request->send(404, "text/html", "<h1>Dashboard not found</h1><p>Please upload dashboard.html to LittleFS</p>");
         }
     });
     
@@ -381,6 +451,10 @@ void WiFiConfigServer::setupConfigRoutes() {
     
     server->on("/light", HTTP_GET, [this](AsyncWebServerRequest *request) {
         request->send(200, "application/json", getLightSensorJSON());
+    });
+    
+    server->on("/alert", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        request->send(200, "application/json", getAlertSettingsJSON());
     });
 }
 
@@ -470,6 +544,8 @@ String WiFiConfigServer::getSensorDataJSON() {
     doc["humidity"] = glob_humidity;
     doc["light_level"] = glob_light_level;
     doc["led_state"] = glob_led_state;
+    doc["temp_alert"] = glob_temp_alert;
+    doc["temp_threshold"] = tempThreshold;
     doc["timestamp"] = millis();
     doc["valid"] = !isnan(glob_temperature) && !isnan(glob_humidity);
     
@@ -486,6 +562,8 @@ void WiFiConfigServer::sendSensorData() {
         doc["humidity"] = glob_humidity;
         doc["light_level"] = glob_light_level;
         doc["led_state"] = glob_led_state;
+        doc["temp_alert"] = glob_temp_alert;
+        doc["temp_threshold"] = tempThreshold;
         doc["timestamp"] = millis();
         doc["valid"] = !isnan(glob_temperature) && !isnan(glob_humidity);
         
@@ -565,6 +643,8 @@ void WiFiConfigServer::setLEDState(bool state) {
     Serial.printf("LED GPIO %d set to %s\n", LED_GPIO, state ? "ON" : "OFF");
 }
 
+// Manual control disabled for temperature-based automatic control
+/*
 void WiFiConfigServer::setNeoState(bool state) {
     neoState = state;
     if (state) {
@@ -577,12 +657,75 @@ void WiFiConfigServer::setNeoState(bool state) {
     Serial.printf("NeoPixel GPIO %d set to %s (saved color: RGB(%d,%d,%d))\n", 
                   NEO_PIN, state ? "ON" : "OFF", savedNeoR, savedNeoG, savedNeoB);
 }
+*/
 
+// Temperature-based NeoPixel control function
+void WiFiConfigServer::setNeoColorForTemperature(float temperature) {
+    if (temperature > tempThreshold) {
+        // Start blinking with alert color when temperature is above threshold
+        if (!isBlinking) {
+            isBlinking = true;
+            lastBlinkTime = millis();
+            blinkState = true;
+        }
+        neoState = true;
+        glob_temp_alert = true;
+        Serial.printf("NeoPixel GPIO %d blinking alert color RGB(%d,%d,%d) due to high temperature: %.2f°C (threshold: %.1f°C)\n", 
+                      NEO_PIN, alertNeoR, alertNeoG, alertNeoB, temperature, tempThreshold);
+    } else {
+        // Return to normal color when temperature is at or below threshold
+        isBlinking = false;
+        neoPixel->setPixelColor(0, neoPixel->Color(savedNeoR, savedNeoG, savedNeoB));
+        neoPixel->show();
+        neoState = true;
+        glob_temp_alert = false;
+        Serial.printf("NeoPixel GPIO %d set to normal color RGB(%d,%d,%d), temperature: %.2f°C (threshold: %.1f°C)\n", 
+                      NEO_PIN, savedNeoR, savedNeoG, savedNeoB, temperature, tempThreshold);
+    }
+}
+
+// Handle NeoPixel blinking during temperature alerts
+void WiFiConfigServer::handleNeoBlinking() {
+    if (isBlinking) {
+        unsigned long currentTime = millis();
+        if (currentTime - lastBlinkTime > 500) { // Blink every 500ms
+            blinkState = !blinkState;
+            lastBlinkTime = currentTime;
+            
+            if (blinkState) {
+                // Show alert color
+                neoPixel->setPixelColor(0, neoPixel->Color(alertNeoR, alertNeoG, alertNeoB));
+            } else {
+                // Turn off
+                neoPixel->setPixelColor(0, neoPixel->Color(0, 0, 0));
+            }
+            neoPixel->show();
+        }
+    }
+}
+
+// Manual color setting for normal operation
 void WiFiConfigServer::setNeoColor(uint8_t r, uint8_t g, uint8_t b) {
-    neoPixel->setPixelColor(0, neoPixel->Color(r, g, b));
-    neoPixel->show();
-    neoState = true; // Set NeoPixel as ON when color is changed
-    Serial.printf("NeoPixel GPIO %d color set to RGB(%d, %d, %d)\n", NEO_PIN, r, g, b);
+    if (!isBlinking) { // Only allow manual control when not in alert mode
+        neoPixel->setPixelColor(0, neoPixel->Color(r, g, b));
+        neoPixel->show();
+        neoState = true;
+        Serial.printf("NeoPixel GPIO %d color set to RGB(%d, %d, %d)\n", NEO_PIN, r, g, b);
+    }
+}
+
+// Manual state control for normal operation
+void WiFiConfigServer::setNeoState(bool state) {
+    if (!isBlinking) { // Only allow manual control when not in alert mode
+        neoState = state;
+        if (state) {
+            neoPixel->setPixelColor(0, neoPixel->Color(savedNeoR, savedNeoG, savedNeoB));
+        } else {
+            neoPixel->setPixelColor(0, neoPixel->Color(0, 0, 0));
+        }
+        neoPixel->show();
+        Serial.printf("NeoPixel GPIO %d set to %s\n", NEO_PIN, state ? "ON" : "OFF");
+    }
 }
 
 bool WiFiConfigServer::saveNeoColor(uint8_t r, uint8_t g, uint8_t b, const String& hex) {
@@ -630,6 +773,65 @@ bool WiFiConfigServer::getLEDState() {
 
 bool WiFiConfigServer::getNeoState() {
     return neoState;
+}
+
+bool WiFiConfigServer::saveAlertColor(uint8_t r, uint8_t g, uint8_t b, const String& hex) {
+    alertNeoR = r;
+    alertNeoG = g;
+    alertNeoB = b;
+    alertNeoHex = hex;
+    
+    // Save to preferences
+    preferences.putUChar("alert_r", r);
+    preferences.putUChar("alert_g", g);
+    preferences.putUChar("alert_b", b);
+    preferences.putString("alert_hex", hex);
+    
+    Serial.printf("Alert color saved: RGB(%d, %d, %d) = %s\n", r, g, b, hex.c_str());
+    return true;
+}
+
+bool WiFiConfigServer::saveTempThreshold(float threshold) {
+    tempThreshold = threshold;
+    HIGH_TEMP_THRESHOLD = threshold; // Update global threshold
+    
+    // Save to preferences
+    preferences.putFloat("temp_threshold", threshold);
+    
+    Serial.printf("Temperature threshold saved: %.1f°C\n", threshold);
+    return true;
+}
+
+void WiFiConfigServer::loadAlertSettings() {
+    // Load saved alert color from preferences, use default if not found
+    alertNeoR = preferences.getUChar("alert_r", 255);
+    alertNeoG = preferences.getUChar("alert_g", 0);
+    alertNeoB = preferences.getUChar("alert_b", 0);
+    alertNeoHex = preferences.getString("alert_hex", "#ff0000");
+    
+    // Load temperature threshold
+    tempThreshold = preferences.getFloat("temp_threshold", 30.0);
+    HIGH_TEMP_THRESHOLD = tempThreshold; // Update global threshold
+    
+    Serial.printf("Loaded alert settings: Color RGB(%d, %d, %d) = %s, Threshold: %.1f°C\n", 
+                  alertNeoR, alertNeoG, alertNeoB, alertNeoHex.c_str(), tempThreshold);
+}
+
+String WiFiConfigServer::getAlertSettingsJSON() {
+    DynamicJsonDocument doc(256);
+    
+    doc["alert_r"] = alertNeoR;
+    doc["alert_g"] = alertNeoG;
+    doc["alert_b"] = alertNeoB;
+    doc["alert_hex"] = alertNeoHex;
+    doc["temp_threshold"] = tempThreshold;
+    doc["current_temp"] = glob_temperature;
+    doc["temp_alert"] = glob_temp_alert;
+    doc["timestamp"] = millis();
+    
+    String result;
+    serializeJson(doc, result);
+    return result;
 }
 
 String WiFiConfigServer::getConfigPageHTML() {
