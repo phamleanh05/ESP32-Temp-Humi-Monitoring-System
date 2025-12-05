@@ -8,6 +8,10 @@
 
 extern float glob_temperature;
 extern float glob_humidity;
+extern int glob_light_level;
+extern bool glob_led_state;
+extern bool glob_temp_alert;
+extern float HIGH_TEMP_THRESHOLD;
 
 extern String WIFI_SSID;
 extern String WIFI_PASS;

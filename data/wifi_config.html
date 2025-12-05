@@ -17,6 +17,34 @@
             box-shadow: 0 15px 35px rgba(0,0,0,0.1);
             overflow: hidden;
         }
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .container { max-width: 500px; }
+            .network-list { grid-template-columns: 1fr; }
+        }
+        
+        @media (min-width: 769px) and (max-width: 1024px) {
+            .container { max-width: 90%; margin: 0 auto; }
+            .network-list { 
+                display: grid; 
+                grid-template-columns: repeat(2, 1fr); 
+                gap: 10px; 
+            }
+        }
+        
+        @media (min-width: 1025px) {
+            .container { 
+                max-width: 95%; 
+                width: calc(100vw - 40px);
+                margin: 0 auto; 
+            }
+            .network-list { 
+                display: grid; 
+                grid-template-columns: repeat(4, 1fr); 
+                gap: 15px; 
+            }
+        }
         .header { 
             background: linear-gradient(135deg, #4CAF50, #45a049);
             color: white; padding: 25px; text-align: center;
@@ -77,14 +105,28 @@
         }
         .modal-content { 
             background: white; padding: 30px; border-radius: 15px;
-            width: 90%; max-width: 400px; text-align: center;
+            width: 90%; max-width: 500px; text-align: center;
+        }
+        
+        @media (min-width: 1025px) {
+            .modal-content { max-width: 600px; }
         }
         .controls { text-align: center; margin: 20px 0; }
+        .nav-btn {
+            background: rgba(255,255,255,0.2); color: white; border: none;
+            padding: 8px 16px; border-radius: 20px; cursor: pointer;
+            transition: all 0.3s; font-size: 14px;
+        }
+        .nav-btn:hover { background: rgba(255,255,255,0.3); }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <button class="nav-btn" onclick="goToDashboard()">📊 Dashboard</button>
+                <button class="nav-btn" onclick="refreshStatus()">🔄 Refresh</button>
+            </div>
             <h1>🌐 WiFi Configuration</h1>
             <p>ESP32 Network Setup</p>
         </div>
@@ -95,22 +137,13 @@
                 <div id="status-details"></div>
             </div>
             
-            <div id="sensors" class="status" style="background: #e3f2fd; border-color: #2196F3; color: #0d47a1;">
-                <strong>🌡️ Sensors:</strong> 
-                <span id="temperature">--°C</span> | 
-                <span id="humidity">--%</span>
-                <div id="sensor-details" style="font-size: 12px; margin-top: 5px;">Last update: --</div>
-            </div>
-            
-            <div id="led-controls" class="status" style="background: #fff3e0; border-color: #ff9800; color: #e65100;">
-                <strong>💡 LED Control:</strong>
-                <div style="margin-top: 10px;">
-                    <button id="led-btn" class="btn btn-secondary" onclick="toggleLED()">
-                        💡 LED (GPIO 48): <span id="led-status">OFF</span>
-                    </button>
-                    <button id="neo-btn" class="btn btn-secondary" onclick="toggleNeo()">
-                        🌈 NeoPixel (GPIO 45): <span id="neo-status">OFF</span>
-                    </button>
+            <div style="text-align: center; margin: 20px 0; padding: 20px; background: #e3f2fd; border-radius: 8px; border-left: 4px solid #2196F3;">
+                <h3 style="color: #1976D2; margin-bottom: 15px;">📊 System Dashboard</h3>
+                <button class="btn btn-primary" onclick="goToDashboard()" style="font-size: 18px; padding: 15px 30px;">
+                    Go to Dashboard
+                </button>
+                <div style="font-size: 14px; color: #1976D2; margin-top: 10px;">
+                    View sensors, control LEDs and monitor system status
                 </div>
             </div>
             
@@ -118,7 +151,6 @@
                 <button class="btn btn-primary" onclick="scanNetworks()">🔍 Scan Networks</button>
                 <button class="btn btn-secondary" onclick="refreshStatus()">🔄 Refresh</button>
                 <button class="btn btn-danger" onclick="disconnect()">❌ Disconnect</button>
-                <button class="btn btn-danger" onclick="clearCredentials()">🗑️ Clear Saved</button>
             </div>
             
             <div id="loading" class="loading hidden">
@@ -152,8 +184,6 @@
             ws.onopen = function() {
                 console.log('WebSocket connected');
                 refreshStatus();
-                refreshSensors();
-                refreshLEDs();
             };
             
             ws.onmessage = function(event) {
@@ -172,10 +202,6 @@
                 updateStatus(data);
             } else if (data.type === 'networks') {
                 updateNetworkList(data.list);
-            } else if (data.type === 'sensors') {
-                updateSensorData(data);
-            } else if (data.type === 'leds') {
-                updateLEDStatus(data);
             } else if (data.type === 'connect_result') {
                 if (data.success) {
                     alert('✅ Connected successfully!');
@@ -184,9 +210,6 @@
                 } else {
                     alert('❌ Connection failed: ' + data.message);
                 }
-            } else if (data.type === 'credentials_cleared') {
-                alert('🗑️ Saved credentials cleared');
-                refreshStatus();
             }
         }
         
@@ -210,63 +233,8 @@
             }
         }
         
-        function updateSensorData(data) {
-            const tempEl = document.getElementById('temperature');
-            const humidityEl = document.getElementById('humidity');
-            const sensorDetailsEl = document.getElementById('sensor-details');
-            const sensorsEl = document.getElementById('sensors');
-            
-            if (data.valid) {
-                tempEl.textContent = `${data.temperature.toFixed(1)}°C`;
-                humidityEl.textContent = `${data.humidity.toFixed(1)}%`;
-                sensorsEl.style.background = '#e8f5e8';
-                sensorsEl.style.borderColor = '#4CAF50';
-                sensorsEl.style.color = '#2e7d32';
-            } else {
-                tempEl.textContent = 'Error';
-                humidityEl.textContent = 'Error';
-                sensorsEl.style.background = '#ffebee';
-                sensorsEl.style.borderColor = '#f44336';
-                sensorsEl.style.color = '#c62828';
-            }
-            
-            const now = new Date();
-            sensorDetailsEl.textContent = `Last update: ${now.toLocaleTimeString()}`;
-        }
-        
-        function updateLEDStatus(data) {
-            const ledStatusEl = document.getElementById('led-status');
-            const neoStatusEl = document.getElementById('neo-status');
-            const ledBtnEl = document.getElementById('led-btn');
-            const neoBtnEl = document.getElementById('neo-btn');
-            
-            // Update LED status
-            ledStatusEl.textContent = data.led_state ? 'ON' : 'OFF';
-            ledBtnEl.className = data.led_state ? 'btn btn-primary' : 'btn btn-secondary';
-            
-            // Update NeoPixel status  
-            neoStatusEl.textContent = data.neo_state ? 'ON' : 'OFF';
-            neoBtnEl.className = data.neo_state ? 'btn btn-primary' : 'btn btn-secondary';
-        }
-        
-        function toggleLED() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                const currentState = document.getElementById('led-status').textContent === 'ON';
-                ws.send(JSON.stringify({
-                    action: 'control_led',
-                    state: !currentState
-                }));
-            }
-        }
-        
-        function toggleNeo() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                const currentState = document.getElementById('neo-status').textContent === 'ON';
-                ws.send(JSON.stringify({
-                    action: 'control_neo', 
-                    state: !currentState
-                }));
-            }
+        function goToDashboard() {
+            window.location.href = `${window.location.protocol}//${window.location.host}/dashboard`;
         }
         
         function updateNetworkList(networks) {
@@ -338,30 +306,10 @@
             }
         }
         
-        function clearCredentials() {
-            if (confirm('Clear saved WiFi credentials?')) {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({action: 'clear_credentials'}));
-                }
-            }
-        }
         
         function refreshStatus() {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({action: 'get_status'}));
-                ws.send(JSON.stringify({action: 'get_sensors'}));
-            }
-        }
-        
-        function refreshSensors() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({action: 'get_sensors'}));
-            }
-        }
-        
-        function refreshLEDs() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({action: 'get_leds'}));
             }
         }
         

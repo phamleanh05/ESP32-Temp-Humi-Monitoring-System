@@ -1,4 +1,4 @@
-#include "wifi_config.h"
+#include "webserver_wifi_config.h"
 
 WiFiConfigServer* wifiConfig = nullptr;
 
@@ -7,7 +7,7 @@ AsyncWebServer wifiConfigServer(8080);
 AsyncWebSocket wifiConfigWS("/ws");
 
 // WiFi configuration task
-void wifi_config_task(void *parameter)
+void webserver_wifi_config_task(void *parameter)
 {
   // Initialize WiFi config
   wifiConfig = new WiFiConfigServer(&wifiConfigServer, &wifiConfigWS);
@@ -24,15 +24,18 @@ void wifi_config_task(void *parameter)
 }
 
 WiFiConfigServer::WiFiConfigServer(AsyncWebServer* webServer, AsyncWebSocket* webSocket) 
-    : server(webServer), ws(webSocket), isConfigMode(false), ledState(false), neoState(false) {
+    : server(webServer), ws(webSocket), isConfigMode(false), ledState(false), neoState(true),
+      savedNeoR(0), savedNeoG(255), savedNeoB(0), savedNeoHex("#00ff00"),
+      alertNeoR(255), alertNeoG(0), alertNeoB(0), alertNeoHex("#ff0000"), tempThreshold(30.0),
+      isBlinking(false), lastBlinkTime(0), blinkState(false) {
     // Initialize LED pins
     pinMode(LED_GPIO, OUTPUT);
     digitalWrite(LED_GPIO, LOW);
     
-    // Initialize NeoPixel
+    // Initialize NeoPixel - start with normal color (green)
     neoPixel = new Adafruit_NeoPixel(LED_COUNT, NEO_PIN, NEO_GRB + NEO_KHZ800);
     neoPixel->begin();
-    neoPixel->clear();
+    neoPixel->setPixelColor(0, neoPixel->Color(savedNeoR, savedNeoG, savedNeoB)); // Start with saved color
     neoPixel->show();
 }
 
@@ -43,6 +46,10 @@ void WiFiConfigServer::begin() {
         Serial.println("LittleFS Mount Failed");
         return;
     }
+    
+    // Load saved NeoPixel color and alert settings
+    loadSavedNeoColor();
+    loadAlertSettings();
     
     ws->onEvent([this](AsyncWebSocket *server, AsyncWebSocketClient *client, 
                        AwsEventType type, void *arg, uint8_t *data, size_t len) {
@@ -79,10 +86,27 @@ void WiFiConfigServer::loop() {
     }
     
     static unsigned long lastStatusUpdate = 0;
+    static unsigned long lastSensorUpdate = 0;
+    
     if (millis() - lastStatusUpdate > 5000) {
         sendWiFiStatus();
         lastStatusUpdate = millis();
     }
+    
+    // Send sensor data including light sensor every 3 seconds
+    if (millis() - lastSensorUpdate > 3000) {
+        sendSensorData();
+        
+        // Update NeoPixel based on temperature
+        if (!isnan(glob_temperature)) {
+            setNeoColorForTemperature(glob_temperature);
+        }
+        
+        lastSensorUpdate = millis();
+    }
+    
+    // Handle NeoPixel blinking for alerts
+    handleNeoBlinking();
 }
 
 void WiFiConfigServer::startConfigMode(const char* apSSID, const char* apPassword) {
@@ -113,6 +137,10 @@ void WiFiConfigServer::stopConfigMode() {
 bool WiFiConfigServer::saveWiFiCredentials(const String& ssid, const String& password) {
     preferences.putString("ssid", ssid);
     preferences.putString("password", password);
+    // Save_info_File(ssid, password, CORE_IOT_TOKEN.isEmpty() ? "" : CORE_IOT_TOKEN, 
+    //                CORE_IOT_SERVER.isEmpty() ? "" : CORE_IOT_SERVER, 
+    //                CORE_IOT_PORT.isEmpty() ? "" : CORE_IOT_PORT);
+
     Serial.printf("WiFi credentials saved: %s\n", ssid.c_str());
     return true;
 }
@@ -121,14 +149,11 @@ WiFiCredentials WiFiConfigServer::loadWiFiCredentials() {
     WiFiCredentials creds;
     creds.ssid = preferences.getString("ssid", "");
     creds.password = preferences.getString("password", "");
+    // creds.ssid = WIFI_SSID;
+    // creds.password = WIFI_PASS;
     return creds;
 }
 
-void WiFiConfigServer::clearWiFiCredentials() {
-    preferences.remove("ssid");
-    preferences.remove("password");
-    Serial.println("WiFi credentials cleared");
-}
 
 std::vector<WiFiNetwork> WiFiConfigServer::scanWiFiNetworks() {
     std::vector<WiFiNetwork> networks;
@@ -216,6 +241,24 @@ void WiFiConfigServer::onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *c
         Serial.printf("WebSocket client #%u connected\n", client->id());
         sendWiFiStatus();
         sendWiFiList();
+        sendSensorData();
+        sendLEDStatus();
+        sendLightSensorData();
+        
+        // Send alert settings
+        DynamicJsonDocument doc(512);
+        doc["type"] = "alert_settings";
+        doc["alert_r"] = alertNeoR;
+        doc["alert_g"] = alertNeoG;
+        doc["alert_b"] = alertNeoB;
+        doc["alert_hex"] = alertNeoHex;
+        doc["temp_threshold"] = tempThreshold;
+        doc["current_temp"] = glob_temperature;
+        doc["temp_alert"] = glob_temp_alert;
+        
+        String message;
+        serializeJson(doc, message);
+        ws->textAll(message);
     } else if (type == WS_EVT_DISCONNECT) {
         Serial.printf("WebSocket client #%u disconnected\n", client->id());
     } else if (type == WS_EVT_DATA) {
@@ -269,15 +312,6 @@ void WiFiConfigServer::handleWebSocketMessage(void *arg, uint8_t *data, size_t l
         } else if (action == "disconnect") {
             disconnectWiFi();
             sendWiFiStatus();
-        } else if (action == "clear_credentials") {
-            clearWiFiCredentials();
-            DynamicJsonDocument response(256);
-            response["type"] = "credentials_cleared";
-            response["success"] = true;
-            
-            String responseStr;
-            serializeJson(response, responseStr);
-            ws->textAll(responseStr);
         } else if (action == "get_status") {
             sendWiFiStatus();
         } else if (action == "get_sensors") {
@@ -288,21 +322,97 @@ void WiFiConfigServer::handleWebSocketMessage(void *arg, uint8_t *data, size_t l
             bool state = doc["state"];
             setLEDState(state);
             sendLEDStatus();
+        // Manual NeoPixel control functions restored for normal operation
         } else if (action == "control_neo") {
             bool state = doc["state"];
             setNeoState(state);
             sendLEDStatus();
+        } else if (action == "preview_neo_color") {
+            uint8_t r = doc["r"];
+            uint8_t g = doc["g"];
+            uint8_t b = doc["b"];
+            setNeoColor(r, g, b);
+            
+            // Send confirmation response for preview
+            DynamicJsonDocument response(256);
+            response["type"] = "neo_color_result";
+            response["action"] = "preview";
+            response["success"] = true;
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
+        } else if (action == "save_neo_color") {
+            uint8_t r = doc["r"];
+            uint8_t g = doc["g"];
+            uint8_t b = doc["b"];
+            String hex = doc["hex"];
+            
+            bool saved = saveNeoColor(r, g, b, hex);
+            if (!isBlinking) { // Apply immediately if not in alert mode
+                setNeoColor(r, g, b);
+            }
+            
+            // Send confirmation response for save
+            DynamicJsonDocument response(256);
+            response["type"] = "neo_color_result";
+            response["action"] = "save";
+            response["success"] = saved;
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
+        } else if (action == "get_light") {
+            sendLightSensorData();
+        } else if (action == "save_alert_color") {
+            uint8_t r = doc["r"];
+            uint8_t g = doc["g"];
+            uint8_t b = doc["b"];
+            String hex = doc["hex"];
+            
+            bool saved = saveAlertColor(r, g, b, hex);
+            
+            DynamicJsonDocument response(256);
+            response["type"] = "alert_color_result";
+            response["success"] = saved;
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
+        } else if (action == "save_temp_threshold") {
+            float threshold = doc["threshold"];
+            
+            bool saved = saveTempThreshold(threshold);
+            
+            DynamicJsonDocument response(256);
+            response["type"] = "temp_threshold_result";
+            response["success"] = saved;
+            response["threshold"] = threshold;
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
+        } else if (action == "get_alert_settings") {
+            DynamicJsonDocument response(512);
+            response["type"] = "alert_settings";
+            response["alert_r"] = alertNeoR;
+            response["alert_g"] = alertNeoG;
+            response["alert_b"] = alertNeoB;
+            response["alert_hex"] = alertNeoHex;
+            response["temp_threshold"] = tempThreshold;
+            response["current_temp"] = glob_temperature;
+            response["temp_alert"] = glob_temp_alert;
+            
+            String responseStr;
+            serializeJson(response, responseStr);
+            ws->textAll(responseStr);
         }
     }
 }
 
 void WiFiConfigServer::setupConfigRoutes() {
     server->on("/", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        // Try to serve from LittleFS first, fallback to function
-        if (LittleFS.exists("/wifi_config.html")) {
-            request->send(LittleFS, "/wifi_config.html", "text/html");
+        // Serve dashboard.html as root page
+        if (LittleFS.exists("/dashboard.html")) {
+            request->send(LittleFS, "/dashboard.html", "text/html");
         } else {
-            request->send(200, "text/html", getConfigPageHTML());
+            request->send(404, "text/html", "<h1>Dashboard not found</h1><p>Please upload dashboard.html to LittleFS</p>");
         }
     });
     
@@ -312,6 +422,14 @@ void WiFiConfigServer::setupConfigRoutes() {
             request->send(LittleFS, "/wifi_config.html", "text/html");
         } else {
             request->send(200, "text/html", getConfigPageHTML());
+        }
+    });
+    
+    server->on("/dashboard", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        if (LittleFS.exists("/dashboard.html")) {
+            request->send(LittleFS, "/dashboard.html", "text/html");
+        } else {
+            request->send(404, "text/html", "<h1>Dashboard not found</h1><p>Please upload dashboard.html to LittleFS</p>");
         }
     });
     
@@ -329,6 +447,14 @@ void WiFiConfigServer::setupConfigRoutes() {
     
     server->on("/leds", HTTP_GET, [this](AsyncWebServerRequest *request) {
         request->send(200, "application/json", getLEDStatusJSON());
+    });
+    
+    server->on("/light", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        request->send(200, "application/json", getLightSensorJSON());
+    });
+    
+    server->on("/alert", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        request->send(200, "application/json", getAlertSettingsJSON());
     });
 }
 
@@ -412,10 +538,14 @@ void WiFiConfigServer::broadcastMessage(const String& message) {
 }
 
 String WiFiConfigServer::getSensorDataJSON() {
-    DynamicJsonDocument doc(256);
+    DynamicJsonDocument doc(512);
     
     doc["temperature"] = glob_temperature;
     doc["humidity"] = glob_humidity;
+    doc["light_level"] = glob_light_level;
+    doc["led_state"] = glob_led_state;
+    doc["temp_alert"] = glob_temp_alert;
+    doc["temp_threshold"] = tempThreshold;
     doc["timestamp"] = millis();
     doc["valid"] = !isnan(glob_temperature) && !isnan(glob_humidity);
     
@@ -426,10 +556,14 @@ String WiFiConfigServer::getSensorDataJSON() {
 
 void WiFiConfigServer::sendSensorData() {
     if (ws->count() > 0) {
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(512);
         doc["type"] = "sensors";
         doc["temperature"] = glob_temperature;
         doc["humidity"] = glob_humidity;
+        doc["light_level"] = glob_light_level;
+        doc["led_state"] = glob_led_state;
+        doc["temp_alert"] = glob_temp_alert;
+        doc["temp_threshold"] = tempThreshold;
         doc["timestamp"] = millis();
         doc["valid"] = !isnan(glob_temperature) && !isnan(glob_humidity);
         
@@ -440,12 +574,29 @@ void WiFiConfigServer::sendSensorData() {
 }
 
 String WiFiConfigServer::getLEDStatusJSON() {
-    DynamicJsonDocument doc(256);
+    DynamicJsonDocument doc(512);
     
     doc["led_state"] = ledState;
     doc["neo_state"] = neoState;
+    doc["light_led_state"] = glob_led_state;
     doc["led_pin"] = LED_GPIO;
     doc["neo_pin"] = NEO_PIN;
+    doc["light_led_pin"] = 2;
+    doc["timestamp"] = millis();
+    
+    String result;
+    serializeJson(doc, result);
+    return result;
+}
+
+String WiFiConfigServer::getLightSensorJSON() {
+    DynamicJsonDocument doc(256);
+    
+    doc["light_level"] = glob_light_level;
+    doc["led_state"] = glob_led_state;
+    doc["threshold"] = 500;
+    doc["sensor_pin"] = 1;
+    doc["led_pin"] = 2;
     doc["timestamp"] = millis();
     
     String result;
@@ -469,21 +620,151 @@ void WiFiConfigServer::sendLEDStatus() {
     }
 }
 
+void WiFiConfigServer::sendLightSensorData() {
+    if (ws->count() > 0) {
+        DynamicJsonDocument doc(256);
+        doc["type"] = "light";
+        doc["light_level"] = glob_light_level;
+        doc["led_state"] = glob_led_state;
+        doc["threshold"] = 500;
+        doc["sensor_pin"] = 1;
+        doc["led_pin"] = 2;
+        doc["timestamp"] = millis();
+        
+        String message;
+        serializeJson(doc, message);
+        ws->textAll(message);
+    }
+}
+
 void WiFiConfigServer::setLEDState(bool state) {
     ledState = state;
     digitalWrite(LED_GPIO, state ? HIGH : LOW);
     Serial.printf("LED GPIO %d set to %s\n", LED_GPIO, state ? "ON" : "OFF");
 }
 
+// Manual control disabled for temperature-based automatic control
+/*
 void WiFiConfigServer::setNeoState(bool state) {
     neoState = state;
     if (state) {
-        neoPixel->setPixelColor(0, neoPixel->Color(0, 255, 0)); // Green when ON
+        // Use saved color when turning on
+        neoPixel->setPixelColor(0, neoPixel->Color(savedNeoR, savedNeoG, savedNeoB));
     } else {
         neoPixel->setPixelColor(0, neoPixel->Color(0, 0, 0)); // Off
     }
     neoPixel->show();
-    Serial.printf("NeoPixel GPIO %d set to %s\n", NEO_PIN, state ? "ON" : "OFF");
+    Serial.printf("NeoPixel GPIO %d set to %s (saved color: RGB(%d,%d,%d))\n", 
+                  NEO_PIN, state ? "ON" : "OFF", savedNeoR, savedNeoG, savedNeoB);
+}
+*/
+
+// Temperature-based NeoPixel control function
+void WiFiConfigServer::setNeoColorForTemperature(float temperature) {
+    if (temperature > tempThreshold) {
+        // Start blinking with alert color when temperature is above threshold
+        if (!isBlinking) {
+            isBlinking = true;
+            lastBlinkTime = millis();
+            blinkState = true;
+        }
+        neoState = true;
+        glob_temp_alert = true;
+        Serial.printf("NeoPixel GPIO %d blinking alert color RGB(%d,%d,%d) due to high temperature: %.2f°C (threshold: %.1f°C)\n", 
+                      NEO_PIN, alertNeoR, alertNeoG, alertNeoB, temperature, tempThreshold);
+    } else {
+        // Return to normal color when temperature is at or below threshold
+        isBlinking = false;
+        neoPixel->setPixelColor(0, neoPixel->Color(savedNeoR, savedNeoG, savedNeoB));
+        neoPixel->show();
+        neoState = true;
+        glob_temp_alert = false;
+        Serial.printf("NeoPixel GPIO %d set to normal color RGB(%d,%d,%d), temperature: %.2f°C (threshold: %.1f°C)\n", 
+                      NEO_PIN, savedNeoR, savedNeoG, savedNeoB, temperature, tempThreshold);
+    }
+}
+
+// Handle NeoPixel blinking during temperature alerts
+void WiFiConfigServer::handleNeoBlinking() {
+    if (isBlinking) {
+        unsigned long currentTime = millis();
+        if (currentTime - lastBlinkTime > 500) { // Blink every 500ms
+            blinkState = !blinkState;
+            lastBlinkTime = currentTime;
+            
+            if (blinkState) {
+                // Show alert color
+                neoPixel->setPixelColor(0, neoPixel->Color(alertNeoR, alertNeoG, alertNeoB));
+            } else {
+                // Turn off
+                neoPixel->setPixelColor(0, neoPixel->Color(0, 0, 0));
+            }
+            neoPixel->show();
+        }
+    }
+}
+
+// Manual color setting for normal operation
+void WiFiConfigServer::setNeoColor(uint8_t r, uint8_t g, uint8_t b) {
+    if (!isBlinking) { // Only allow manual control when not in alert mode
+        neoPixel->setPixelColor(0, neoPixel->Color(r, g, b));
+        neoPixel->show();
+        neoState = true;
+        Serial.printf("NeoPixel GPIO %d color set to RGB(%d, %d, %d)\n", NEO_PIN, r, g, b);
+    }
+}
+
+// Manual state control for normal operation
+void WiFiConfigServer::setNeoState(bool state) {
+    if (!isBlinking) { // Only allow manual control when not in alert mode
+        neoState = state;
+        if (state) {
+            neoPixel->setPixelColor(0, neoPixel->Color(savedNeoR, savedNeoG, savedNeoB));
+        } else {
+            neoPixel->setPixelColor(0, neoPixel->Color(0, 0, 0));
+        }
+        neoPixel->show();
+        Serial.printf("NeoPixel GPIO %d set to %s\n", NEO_PIN, state ? "ON" : "OFF");
+    }
+}
+
+bool WiFiConfigServer::saveNeoColor(uint8_t r, uint8_t g, uint8_t b, const String& hex) {
+    savedNeoR = r;
+    savedNeoG = g;
+    savedNeoB = b;
+    savedNeoHex = hex;
+    
+    // Save to preferences
+    preferences.putUChar("neo_r", r);
+    preferences.putUChar("neo_g", g);
+    preferences.putUChar("neo_b", b);
+    preferences.putString("neo_hex", hex);
+    
+    Serial.printf("NeoPixel color saved: RGB(%d, %d, %d) = %s\n", r, g, b, hex.c_str());
+    return true;
+}
+
+void WiFiConfigServer::loadSavedNeoColor() {
+    // Load saved color from preferences, use default if not found
+    savedNeoR = preferences.getUChar("neo_r", 0);
+    savedNeoG = preferences.getUChar("neo_g", 255);
+    savedNeoB = preferences.getUChar("neo_b", 0);
+    savedNeoHex = preferences.getString("neo_hex", "#00ff00");
+    
+    Serial.printf("Loaded saved NeoPixel color: RGB(%d, %d, %d) = %s\n", 
+                  savedNeoR, savedNeoG, savedNeoB, savedNeoHex.c_str());
+    
+    // Send saved color to connected clients
+    DynamicJsonDocument doc(256);
+    doc["type"] = "saved_color";
+    doc["r"] = savedNeoR;
+    doc["g"] = savedNeoG;
+    doc["b"] = savedNeoB;
+    doc["hex"] = savedNeoHex;
+    
+    String message;
+    serializeJson(doc, message);
+    ws->textAll(message);
 }
 
 bool WiFiConfigServer::getLEDState() {
@@ -492,6 +773,65 @@ bool WiFiConfigServer::getLEDState() {
 
 bool WiFiConfigServer::getNeoState() {
     return neoState;
+}
+
+bool WiFiConfigServer::saveAlertColor(uint8_t r, uint8_t g, uint8_t b, const String& hex) {
+    alertNeoR = r;
+    alertNeoG = g;
+    alertNeoB = b;
+    alertNeoHex = hex;
+    
+    // Save to preferences
+    preferences.putUChar("alert_r", r);
+    preferences.putUChar("alert_g", g);
+    preferences.putUChar("alert_b", b);
+    preferences.putString("alert_hex", hex);
+    
+    Serial.printf("Alert color saved: RGB(%d, %d, %d) = %s\n", r, g, b, hex.c_str());
+    return true;
+}
+
+bool WiFiConfigServer::saveTempThreshold(float threshold) {
+    tempThreshold = threshold;
+    HIGH_TEMP_THRESHOLD = threshold; // Update global threshold
+    
+    // Save to preferences
+    preferences.putFloat("temp_threshold", threshold);
+    
+    Serial.printf("Temperature threshold saved: %.1f°C\n", threshold);
+    return true;
+}
+
+void WiFiConfigServer::loadAlertSettings() {
+    // Load saved alert color from preferences, use default if not found
+    alertNeoR = preferences.getUChar("alert_r", 255);
+    alertNeoG = preferences.getUChar("alert_g", 0);
+    alertNeoB = preferences.getUChar("alert_b", 0);
+    alertNeoHex = preferences.getString("alert_hex", "#ff0000");
+    
+    // Load temperature threshold
+    tempThreshold = preferences.getFloat("temp_threshold", 30.0);
+    HIGH_TEMP_THRESHOLD = tempThreshold; // Update global threshold
+    
+    Serial.printf("Loaded alert settings: Color RGB(%d, %d, %d) = %s, Threshold: %.1f°C\n", 
+                  alertNeoR, alertNeoG, alertNeoB, alertNeoHex.c_str(), tempThreshold);
+}
+
+String WiFiConfigServer::getAlertSettingsJSON() {
+    DynamicJsonDocument doc(256);
+    
+    doc["alert_r"] = alertNeoR;
+    doc["alert_g"] = alertNeoG;
+    doc["alert_b"] = alertNeoB;
+    doc["alert_hex"] = alertNeoHex;
+    doc["temp_threshold"] = tempThreshold;
+    doc["current_temp"] = glob_temperature;
+    doc["temp_alert"] = glob_temp_alert;
+    doc["timestamp"] = millis();
+    
+    String result;
+    serializeJson(doc, result);
+    return result;
 }
 
 String WiFiConfigServer::getConfigPageHTML() {
@@ -510,18 +850,7 @@ String WiFiConfigServer::getConfigPageHTML() {
         Serial.println("/wifi_config.html not found in LittleFS");
     }
     
-    // Fallback: Return full HTML if file not found (temporary solution)
-    Serial.println("Using fallback HTML with sensor support");
-    return R"rawliteral(<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ESP32 WiFi Configuration</title>
-<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;padding:20px;color:#333}.container{max-width:500px;margin:0 auto;background:white;border-radius:15px;box-shadow:0 15px 35px rgba(0,0,0,0.1);overflow:hidden}.header{background:linear-gradient(135deg,#4CAF50,#45a049);color:white;padding:25px;text-align:center}.content{padding:25px}.status{padding:15px;border-radius:8px;margin-bottom:20px;border-left:4px solid}.status.connected{background:#e8f5e8;border-color:#4CAF50;color:#2e7d32}.status.disconnected{background:#ffebee;border-color:#f44336;color:#c62828}.status.config{background:#fff3e0;border-color:#ff9800;color:#e65100}.network-list{margin:20px 0}.network-item{display:flex;justify-content:space-between;align-items:center;padding:15px;margin:8px 0;border-radius:8px;background:#f8f9fa;border:1px solid #e9ecef;cursor:pointer;transition:all 0.3s}.network-item:hover{background:#e9ecef;transform:translateY(-1px)}.network-info{flex:1}.network-name{font-weight:600;margin-bottom:4px}.network-details{font-size:12px;color:#666}.signal-strength{width:30px;height:20px;position:relative;margin-left:10px}.signal-bar{position:absolute;bottom:0;width:4px;background:#ddd;border-radius:1px}.signal-bar.active{background:#4CAF50}.signal-bar:nth-child(1){left:0;height:25%}.signal-bar:nth-child(2){left:6px;height:50%}.signal-bar:nth-child(3){left:12px;height:75%}.signal-bar:nth-child(4){left:18px;height:100%}input[type="password"]{width:100%;padding:12px;margin:10px 0;border:1px solid #ddd;border-radius:8px;font-size:16px}.btn{padding:12px 24px;border:none;border-radius:8px;cursor:pointer;font-size:16px;transition:all 0.3s;margin:5px}.btn-primary{background:#4CAF50;color:white}.btn-secondary{background:#6c757d;color:white}.btn-danger{background:#dc3545;color:white}.btn:hover{transform:translateY(-1px);box-shadow:0 4px 8px rgba(0,0,0,0.2)}.btn:disabled{opacity:0.5;cursor:not-allowed}.hidden{display:none}.loading{text-align:center;padding:20px;color:#666}.modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:1000}.modal-content{background:white;padding:30px;border-radius:15px;width:90%;max-width:400px;text-align:center}.controls{text-align:center;margin:20px 0}</style></head>
-<body><div class="container"><div class="header"><h1>🌐 WiFi Configuration</h1><p>ESP32 Network Setup</p></div>
-<div class="content"><div id="status" class="status disconnected"><strong>Status:</strong> <span id="status-text">Disconnected</span><div id="status-details"></div></div>
-<div id="sensors" class="status" style="background:#e3f2fd;border-color:#2196F3;color:#0d47a1;"><strong>🌡️ Sensors:</strong> <span id="temperature">--°C</span> | <span id="humidity">--%</span><div id="sensor-details" style="font-size:12px;margin-top:5px;">Last update: --</div></div><div id="led-controls" class="status" style="background:#fff3e0;border-color:#ff9800;color:#e65100;"><strong>💡 LED Control:</strong><div style="margin-top:10px;"><button id="led-btn" class="btn btn-secondary" onclick="toggleLED()">💡 LED (GPIO 48): <span id="led-status">OFF</span></button> <button id="neo-btn" class="btn btn-secondary" onclick="toggleNeo()">🌈 NeoPixel (GPIO 45): <span id="neo-status">OFF</span></button></div></div>
-<div class="controls"><button class="btn btn-primary" onclick="scanNetworks()">🔍 Scan Networks</button><button class="btn btn-secondary" onclick="refreshStatus()">🔄 Refresh</button><button class="btn btn-danger" onclick="disconnect()">❌ Disconnect</button><button class="btn btn-danger" onclick="clearCredentials()">🗑️ Clear Saved</button></div>
-<div id="loading" class="loading hidden"><p>📡 Scanning for networks...</p></div><div id="network-list" class="network-list"></div></div></div>
-<div id="passwordModal" class="modal"><div class="modal-content"><h3>🔐 Enter Password</h3><p>Network: <strong id="selected-ssid"></strong></p><input type="password" id="password-input" placeholder="Enter WiFi password"><div style="margin-top:20px;"><button class="btn btn-primary" onclick="connectToNetwork()">Connect</button><button class="btn btn-secondary" onclick="closeModal()">Cancel</button></div></div></div>
-<script>let ws;let selectedSSID='';function initWebSocket(){const protocol=location.protocol==='https:' ? 'wss:' : 'ws:';ws=new WebSocket(`${protocol}//${location.host}/ws`);ws.onopen=function(){console.log('WebSocket connected');refreshStatus();refreshSensors();refreshLEDs();};ws.onmessage=function(event){const data=JSON.parse(event.data);handleWebSocketMessage(data);};ws.onclose=function(){console.log('WebSocket disconnected, reconnecting...');setTimeout(initWebSocket,3000);};}function handleWebSocketMessage(data){if(data.type==='status'){updateStatus(data);}else if(data.type==='networks'){updateNetworkList(data.list);}else if(data.type==='sensors'){updateSensorData(data);}else if(data.type==='leds'){updateLEDStatus(data);}else if(data.type==='connect_result'){if(data.success){alert('✅ Connected successfully!');closeModal();refreshStatus();}else{alert('❌ Connection failed: '+data.message);}}else if(data.type==='credentials_cleared'){alert('🗑️ Saved credentials cleared');refreshStatus();}}function updateStatus(status){const statusEl=document.getElementById('status');const statusTextEl=document.getElementById('status-text');const statusDetailsEl=document.getElementById('status-details');if(status.connected){statusEl.className='status connected';statusTextEl.textContent=`Connected to ${status.ssid}`;statusDetailsEl.innerHTML=`IP: ${status.ip} | Signal: ${status.rssi} dBm`;}else if(status.config_mode){statusEl.className='status config';statusTextEl.textContent='Configuration Mode';statusDetailsEl.innerHTML='Connect to this device to configure WiFi';}else{statusEl.className='status disconnected';statusTextEl.textContent='Disconnected';statusDetailsEl.innerHTML='Not connected to any network';}}function updateSensorData(data){const tempEl=document.getElementById('temperature');const humidityEl=document.getElementById('humidity');const sensorDetailsEl=document.getElementById('sensor-details');const sensorsEl=document.getElementById('sensors');if(data.valid){tempEl.textContent=`${data.temperature.toFixed(1)}°C`;humidityEl.textContent=`${data.humidity.toFixed(1)}%`;sensorsEl.style.background='#e8f5e8';sensorsEl.style.borderColor='#4CAF50';sensorsEl.style.color='#2e7d32';}else{tempEl.textContent='Error';humidityEl.textContent='Error';sensorsEl.style.background='#ffebee';sensorsEl.style.borderColor='#f44336';sensorsEl.style.color='#c62828';}const now=new Date();sensorDetailsEl.textContent=`Last update: ${now.toLocaleTimeString()}`;}function updateNetworkList(networks){const listEl=document.getElementById('network-list');const loadingEl=document.getElementById('loading');loadingEl.classList.add('hidden');if(networks.length===0){listEl.innerHTML='<p style="text-align: center; color: #666;">No networks found</p>';return;}listEl.innerHTML=networks.map(network => {const signalBars=Math.ceil(network.strength / 25);const lockIcon=network.secured ? '🔒' : '🔓';return `<div class="network-item" onclick="selectNetwork('${network.ssid}', ${network.secured})"><div class="network-info"><div class="network-name">${lockIcon} ${network.ssid}</div><div class="network-details">${network.rssi} dBm | ${network.secured ? 'Secured' : 'Open'}</div></div><div class="signal-strength">${[1,2,3,4].map(i => `<div class="signal-bar ${i <= signalBars ? 'active' : ''}"></div>`).join('')}</div></div>`;}).join('');}function scanNetworks(){document.getElementById('loading').classList.remove('hidden');document.getElementById('network-list').innerHTML='';if(ws && ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({action:'scan'}));}}function selectNetwork(ssid,secured){selectedSSID=ssid;document.getElementById('selected-ssid').textContent=ssid;if(secured){document.getElementById('passwordModal').style.display='flex';document.getElementById('password-input').value='';document.getElementById('password-input').focus();}else{connectToNetwork();}}function connectToNetwork(){const password=document.getElementById('password-input').value;if(ws && ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({action:'connect',ssid:selectedSSID,password:password}));}}function disconnect(){if(ws && ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({action:'disconnect'}));}}function clearCredentials(){if(confirm('Clear saved WiFi credentials?')){if(ws && ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({action:'clear_credentials'}));}}}function refreshStatus(){if(ws && ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({action:'get_status'}));ws.send(JSON.stringify({action:'get_sensors'}));}}function refreshSensors(){if(ws && ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({action:'get_sensors'}));}}function refreshLEDs(){if(ws && ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({action:'get_leds'}));}}function updateLEDStatus(data){const ledStatusEl=document.getElementById('led-status');const neoStatusEl=document.getElementById('neo-status');const ledBtnEl=document.getElementById('led-btn');const neoBtnEl=document.getElementById('neo-btn');ledStatusEl.textContent=data.led_state?'ON':'OFF';ledBtnEl.className=data.led_state?'btn btn-primary':'btn btn-secondary';neoStatusEl.textContent=data.neo_state?'ON':'OFF';neoBtnEl.className=data.neo_state?'btn btn-primary':'btn btn-secondary';}function toggleLED(){if(ws && ws.readyState===WebSocket.OPEN){const currentState=document.getElementById('led-status').textContent==='ON';ws.send(JSON.stringify({action:'control_led',state:!currentState}));}}function toggleNeo(){if(ws && ws.readyState===WebSocket.OPEN){const currentState=document.getElementById('neo-status').textContent==='ON';ws.send(JSON.stringify({action:'control_neo',state:!currentState}));}}function closeModal(){document.getElementById('passwordModal').style.display='none';}document.getElementById('password-input').addEventListener('keypress',function(e){if(e.key==='Enter'){connectToNetwork();}});window.onclick=function(event){const modal=document.getElementById('passwordModal');if(event.target===modal){closeModal();}};initWebSocket();</script></body></html>)rawliteral";
+    // Return simple error message if file not found
+    Serial.println("WiFi config HTML file not found");
+    return "<html><body><h1>WiFi Configuration</h1><p>Configuration file not found. Please upload wifi_config.html to LittleFS.</p></body></html>";
 }

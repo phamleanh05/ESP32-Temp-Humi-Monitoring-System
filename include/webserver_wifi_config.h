@@ -1,5 +1,5 @@
-#ifndef WIFI_CONFIG_H
-#define WIFI_CONFIG_H
+#ifndef WEBSERVER_WIFI_CONFIG_H
+#define WEBSERVER_WIFI_CONFIG_H
 
 #include <WiFi.h>
 #include <AsyncWebSocket.h>
@@ -37,6 +37,18 @@ private:
     bool ledState;
     bool neoState;
     Adafruit_NeoPixel* neoPixel;
+    uint8_t savedNeoR, savedNeoG, savedNeoB;
+    String savedNeoHex;
+    
+    // Temperature alert settings
+    uint8_t alertNeoR, alertNeoG, alertNeoB;
+    String alertNeoHex;
+    float tempThreshold;
+    
+    // Normal NeoPixel operation
+    bool isBlinking;
+    unsigned long lastBlinkTime;
+    bool blinkState;
     
     void handleWebSocketMessage(void *arg, uint8_t *data, size_t len);
     void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
@@ -56,7 +68,6 @@ public:
     
     bool saveWiFiCredentials(const String& ssid, const String& password);
     WiFiCredentials loadWiFiCredentials();
-    void clearWiFiCredentials();
     
     std::vector<WiFiNetwork> scanWiFiNetworks();
     bool connectToWiFi(const String& ssid, const String& password, unsigned long timeout = 10000);
@@ -71,20 +82,33 @@ public:
     void sendWiFiList();
     void sendSensorData();
     void sendLEDStatus();
+    void sendLightSensorData();
     void broadcastMessage(const String& message);
     String getSensorDataJSON();
     String getLEDStatusJSON();
+    String getLightSensorJSON();
     
     // LED control methods
     void setLEDState(bool state);
-    void setNeoState(bool state);
+    void setNeoColorForTemperature(float temperature); // Temperature-based NeoPixel control
+    void setNeoColor(uint8_t r, uint8_t g, uint8_t b); // Normal color setting
+    void setNeoState(bool state); // Manual control for normal operation
+    void handleNeoBlinking(); // Handle blinking during alerts
+    bool saveNeoColor(uint8_t r, uint8_t g, uint8_t b, const String& hex);
+    void loadSavedNeoColor();
     bool getLEDState();
     bool getNeoState();
+    
+    // Temperature alert configuration methods
+    bool saveAlertColor(uint8_t r, uint8_t g, uint8_t b, const String& hex);
+    void loadAlertSettings();
+    bool saveTempThreshold(float threshold);
+    String getAlertSettingsJSON();
 };
 
 extern WiFiConfigServer* wifiConfig;
 
 // WiFi configuration task function
-void wifi_config_task(void *parameter);
+void webserver_wifi_config_task(void *parameter);
 
 #endif
